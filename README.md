@@ -122,3 +122,9 @@ service elasticsearch restart
 service kibana restart
 service nginx restart
 ```
+
+###### client setup
+```
+echo 'authpriv.*                      @SYSLOGSERVER:514' >> /etc/rsyslog.d/remote.conf
+echo 'auth.*                          @SYSLOGSERVER:514' >> /etc/rsyslog.d/remote.conf
+```
