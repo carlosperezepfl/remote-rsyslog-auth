@@ -23,6 +23,7 @@ add-apt-repository -y ppa:webupd8team/java
 apt-get update
 apt-get install elasticsearch logstash kibana nginx apache2-utils oracle-java8-installer -y
 ```
+
 ###### Config rsyslog
 ```
 sed -i.bak 's/#module(load="imudp")/module(load="imudp")/g' /etc/rsyslog.conf
@@ -46,5 +47,78 @@ echo 'template(name="json-template"
 
 echo 'authpriv.*                      @'$(hostname -f)':10514;json-template' >> /etc/rsyslog.d/60-output.conf
 echo 'auth.*                          @'$(hostname -f)':10514;json-template' >> /etc/rsyslog.d/60-output.conf
+```
 
+###### logstash
+```
+echo 'input {
+  udp {
+    host => "'$(hostname -f)'"
+    port => "10514"
+    codec => "json"
+    type => "rsyslog"
+  }
+}
+
+filter { }
+
+output {
+  if [type] == "rsyslog" {
+    elasticsearch {
+      hosts => [ "127.0.0.1:9200" ]
+    }
+  }
+}' >> /etc/logstash/conf.d/logstash.conf 
+
+sed -i.bak 's/# node.name: node-1/node.name: '$(hostname -f)'/g' /etc/elasticsearch/elasticsearch.yml 
+sed -i 's/# cluster.name: my-application/cluster.name: elasticsearchCluster/g' /etc/elasticsearch/elasticsearch.yml 
+
+sed -i.bak 's/# server.host: "0.0.0.0"/server.host: "127.0.0.1"/g' /opt/kibana/config/kibana.yml 
+```
+
+###### nginx + ssl
+```
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/nginx-selfsigned.key -out /etc/ssl/certs/nginx-selfsigned.crt -subj "/C=CH/ST=VAUD/L=LAUSANNE/O=IC/OU=IC-IT/CN="$(hostname -f)
+
+
+echo 'server {
+listen      80;
+server_name '$(hostname -f)';   
+return 301 https://$server_name$request_uri;
+}
+
+server {
+listen                	*:443 ;
+ssl on;
+ssl_certificate 		/etc/ssl/certs/nginx-selfsigned.crt;  
+ssl_certificate_key 	/etc/ssl/private/nginx-selfsigned.key;  
+server_name           	'$(hostname -f)'; 
+access_log            	/var/log/nginx/kibana.access.log;
+error_log  				/var/log/nginx/kibana.error.log;
+
+location / {
+auth_basic "Restricted";
+auth_basic_user_file /etc/nginx/conf.d/kibana.htpasswd;
+proxy_pass http://127.0.0.1:5601;
+}
+}' >> /etc/nginx/conf.d/kibana.conf 
+```
+
+###### nginx account
+```
+htpasswd -db -c /etc/nginx/conf.d/kibana.htpasswd admin xxxxxx
+```
+
+###### services
+```
+systemctl enable kibana.service 
+systemctl enable elasticsearch.service 
+systemctl enable logstash.service 
+systemctl enable nginx.service 
+
+service rsyslog restart
+service logstash restart
+service elasticsearch restart
+service kibana restart
+service nginx restart
 ```
