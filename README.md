@@ -9,22 +9,49 @@ Send logins to a syslog remotely
 
 ###### Prepare setup
 ```
-wget -qO - https://packages.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
+- Install SSH keys
+- NFS mount 
+- Directory for the data and logs : 
+      mkdir -p /data/data
+      mkdir -p /data/logs
+      chown -R elasticsearch:elasticsearch /data/
+```
 
-echo "deb https://packages.elastic.co/elasticsearch/2.x/debian stable main" | sudo tee -a /etc/apt/sources.list.d/elasticsearch-2.x.list
-echo "deb https://packages.elastic.co/logstash/2.3/debian stable main" | sudo tee -a /etc/apt/sources.list
-echo "deb http://packages.elastic.co/kibana/4.5/debian stable main" | sudo tee -a /etc/apt/sources.list
-
+###### Install JAVA
+```
+apt-get install -y python-software-properties debconf-utils
 add-apt-repository -y ppa:webupd8team/java
-```
-
-###### Install 
-```
 apt-get update
-apt-get install elasticsearch logstash kibana nginx apache2-utils oracle-java8-installer -y
+echo "oracle-java8-installer shared/accepted-oracle-license-v1-1 select true" | sudo debconf-set-selections
+apt-get install -y oracle-java8-installer
 ```
 
-###### Config rsyslog
+###### Install ELK Stack
+```
+wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
+echo "deb https://artifacts.elastic.co/packages/5.x/apt stable main" | sudo tee -a /etc/apt/sources.list.d/elk.list
+
+apt-get update && apt-get install -y elasticsearch logstash kibana
+
+update-rc.d elasticsearch defaults 95 10
+update-rc.d kibana defaults 95 10
+```
+
+###### Install sFLOW Codec
+```
+apt-get install -y ruby
+git clone https://github.com/carlosperezepfl/logstash-codec-sflow
+gem build logstash-codec-sflow/logstash-codec-sflow.gemspec 
+/usr/share/logstash/bin/logstash-plugin install logstash-codec-sflow-2.0.0.gem 
+```
+
+###### Install nginx 
+```
+apt-get install -y nginx apache2-utils 
+```
+
+
+###### Config rsyslog for remote auth
 ```
 sed -i.bak 's/#module(load="imudp")/module(load="imudp")/g' /etc/rsyslog.conf
 sed -i 's/#input(type="imudp" port="514")/input(type="imudp" port="514")/g' /etc/rsyslog.conf
@@ -45,6 +72,7 @@ echo 'template(name="json-template"
     constant(value="\"}\n")
 } ' >> /etc/rsyslog.d/01-json-template.conf 
 
+
 echo 'authpriv.*                      @'$(hostname -f)':10514;json-template' >> /etc/rsyslog.d/60-output.conf
 echo 'auth.*                          @'$(hostname -f)':10514;json-template' >> /etc/rsyslog.d/60-output.conf
 ```
@@ -53,6 +81,11 @@ echo 'auth.*                          @'$(hostname -f)':10514;json-template' >> 
 ```
 echo 'input {
   udp {
+    port => 6343
+    codec => sflow {}
+    type => "sflow"
+  }
+  udp {
     host => "'$(hostname -f)'"
     port => "10514"
     codec => "json"
@@ -60,20 +93,34 @@ echo 'input {
   }
 }
 
-filter { }
-
 output {
-  if [type] == "rsyslog" {
-    elasticsearch {
-      hosts => [ "127.0.0.1:9200" ]
-    }
-  }
+        stdout { }
+                if [type] == "sflow" {
+                        elasticsearch {
+                                index => "sflow-logstash-%{+YYYY.MM.dd}"
+                                hosts => "localhost"
+                        }
+                }
+                if [type] == "rsyslog" {
+                        elasticsearch {
+                                index => "rsyslog-logstash-%{+YYYY.MM.dd}"
+                                hosts => "localhost"
+                        }
+                }
 }' >> /etc/logstash/conf.d/logstash.conf 
+```
 
-sed -i.bak 's/# node.name: node-1/node.name: '$(hostname -f)'/g' /etc/elasticsearch/elasticsearch.yml 
-sed -i 's/# cluster.name: my-application/cluster.name: elasticsearchCluster/g' /etc/elasticsearch/elasticsearch.yml 
-
-sed -i.bak 's/# server.host: "0.0.0.0"/server.host: "127.0.0.1"/g' /opt/kibana/config/kibana.yml 
+###### elasticsearch
+```
+sed -i.bak 's/#node.name: node-1/node.name: '$(hostname -f)'/g' /etc/elasticsearch/elasticsearch.yml 
+sed -i 's/#cluster.name: my-application/cluster.name: elasticsearchCluster/g' /etc/elasticsearch/elasticsearch.yml 
+sed -i 's/#path.data: \/path\/to\/data/path.data: \/data\/data/g' /etc/elasticsearch/elasticsearch.yml 
+sed -i 's/#path.logs: \/path\/to\/logs/path.logs: \/data\/logs/g' /etc/elasticsearch/elasticsearch.yml 
+sed -i 's/#network.host: 192.168.0.1/network.host: 127.0.0.1/g' /etc/elasticsearch/elasticsearch.yml 
+```
+###### kibana
+```
+sed -i.bak 's/#server.host: "localhost"/server.host: "localhost"/g' /etc/kibana/kibana.yml
 ```
 
 ###### nginx + ssl
@@ -117,7 +164,7 @@ systemctl enable logstash.service
 systemctl enable nginx.service 
 
 service rsyslog restart
-service logstash restart
+systemctl restart logstash.service
 service elasticsearch restart
 service kibana restart
 service nginx restart
