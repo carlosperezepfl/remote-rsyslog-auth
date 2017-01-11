@@ -1,5 +1,5 @@
-# remote-rsyslog-auth
-Send logins to a syslog remotely
+# remote-rsyslog-auth-sflow
+Send logins to a syslog remotely and collect sFLOW
 - Ubuntu 16.04 server
 - rsyslog
 - logstash
